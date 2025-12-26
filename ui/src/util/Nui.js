@@ -20,7 +20,7 @@ export default {
     }
 
     // Return fetch promise with error handling for development
-    return fetch(`https://inventory/${event}`, {
+    return fetch(`https://mythic-inventory/${event}`, {
       method: 'post',
       headers: {
         'Content-type': 'application/json; charset=UTF-8',
