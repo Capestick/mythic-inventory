@@ -586,8 +586,9 @@ function DoMerge(source, data, cb)
 			return
 		end
 	
-		-- Allow purchases from any entity if item has a price
-		if item.price and item.price > 0 then
+		-- Only allow purchases from shops (check if source inventory is actually a shop)
+		local isShopInventory = entityFrom and entityFrom.shop == true
+		if isShopInventory and item.price and item.price > 0 then
 			local cost = math.ceil((item.price * tonumber(data.countTo)))
 			local paymentType = (cash >= cost and 'cash' or (Banking.Balance:Has(char:GetData("BankAccount"), cost) and 'bank' or nil))
 			local isFree = (entityFrom and entityFrom.free) or false
@@ -1146,8 +1147,9 @@ function DoMove(source, data, cb)
 			return
 		end
 	
-		-- Allow purchases from any entity if item has a price
-		if item.price and item.price > 0 then
+		-- Only allow purchases from shops (check if source inventory is actually a shop)
+		local isShopInventory = entityFrom and entityFrom.shop == true
+		if isShopInventory and item.price and item.price > 0 then
 			local cost = math.ceil((item.price * tonumber(data.countTo)))
 			local paymentType = (cash >= cost and 'cash' or (Banking.Balance:Has(char:GetData("BankAccount"), cost) and 'bank' or nil))
 			local isFree = (entityFrom and entityFrom.free) or false
