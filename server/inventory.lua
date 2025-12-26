@@ -1706,6 +1706,10 @@ function RegisterCallbacks()
 		end
 
 		local paymentType = data.paymentType or (cash >= totalCost and 'cash' or 'bank')
+		if paymentType == 'card' then
+			paymentType = 'bank'
+		end
+		
 		if paymentType == 'bank' and not Banking.Balance:Has(char:GetData("BankAccount"), totalCost) then
 			cb({ success = false, reason = "Not enough money" })
 			return

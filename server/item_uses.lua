@@ -114,28 +114,6 @@ function RegisterRandomItems()
 		end)
 	end)
 
-	Inventory.Items:RegisterUse("recycling_bag", "RandomItems", function(source, item)
-		local plyr = Fetch:Source(source)
-		if plyr ~= nil then
-			local char = plyr:GetData("Character")
-			if char ~= nil then
-				if item.MetaData and item.MetaData.Items then
-					for k, v in ipairs(item.MetaData.Items) do
-						Inventory:AddItem(item.Owner, v.name, v.count, {}, 1)
-					end
-					Inventory:UpdateMetaData(item.id, { Items = {} })
-					Inventory.Items:RemoveSlot(item.Owner, item.Name, 1, item.Slot, item.invType)
-					refreshShit(item.Owner, true)
-					Execute:Client(source, "Notification", "Success", "Items retrieved from recycling bag")
-				else
-					Inventory:UpdateMetaData(item.id, { Items = {} })
-					Inventory.Items:RemoveSlot(item.Owner, item.Name, 1, item.Slot, item.invType)
-					refreshShit(item.Owner, true)
-					Execute:Client(source, "Notification", "Error", "Recycling bag is empty")
-				end
-			end
-		end
-	end)
 
 	Inventory.Items:RegisterUse("shop_bag", "RandomItems", function(source, item)
 		local plyr = Fetch:Source(source)
@@ -214,13 +192,35 @@ function RegisterRandomItems()
 	end)
 
 	
+	-- Cooldown tracking to prevent duplicate SIM card operations
+	local _simCardCooldowns = {}
+	local _simCardInProgress = {}
+	
 	RegisterNetEvent("Inventory:InsertSimCard", function(simSlot, phoneSlot)
 		local source = source
+		
+		-- Prevent duplicate calls - check cooldown and if already in progress
+		local cooldownKey = source .. "_insert_" .. tostring(simSlot) .. "_" .. tostring(phoneSlot)
+		if _simCardInProgress[cooldownKey] then
+			return -- Already processing, ignore duplicate call
+		end
+		if _simCardCooldowns[cooldownKey] and (GetGameTimer() - _simCardCooldowns[cooldownKey]) < 3000 then
+			return -- Still on cooldown, ignore duplicate call
+		end
+		_simCardInProgress[cooldownKey] = true
+		_simCardCooldowns[cooldownKey] = GetGameTimer()
+		
 		local plyr = Fetch:Source(source)
-		if plyr == nil then return end
+		if plyr == nil then
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
 		
 		local char = plyr:GetData("Character")
-		if char == nil then return end
+		if char == nil then
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
 		
 		local SID = char:GetData("SID")
 		
@@ -228,6 +228,7 @@ function RegisterRandomItems()
 		local simItem = Inventory:GetSlot(SID, simSlot, 1)
 		if not simItem or simItem.Name ~= "sim_card" then
 			Execute:Client(source, "Notification", "Error", "Invalid SIM Card")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
@@ -235,6 +236,7 @@ function RegisterRandomItems()
 		local phoneItem = Inventory:GetSlot(SID, phoneSlot, 1)
 		if not phoneItem or phoneItem.Name ~= "phone" then
 			Execute:Client(source, "Notification", "Error", "Invalid Phone")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
@@ -244,12 +246,14 @@ function RegisterRandomItems()
 		-- Validate metadata exists (matching reference framework)
 		if not phoneMeta or not simMeta then
 			Execute:Client(source, "Notification", "Error", "Invalid metadata")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
 		-- Check if sim card has number (matching reference framework)
 		if not simMeta.number then
 			Execute:Client(source, "Notification", "Error", "SIM card has no number")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
@@ -258,58 +262,55 @@ function RegisterRandomItems()
 		local cleanNumber = string.gsub(phoneNumber, "-", "")
 		if not string.match(cleanNumber, "^%d%d%d%d%d%d%d%d%d%d$") then
 			Execute:Client(source, "Notification", "Error", "Invalid phone number format")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
+		-- Check if phone number is already in use
 		local needsNewNumber = false
 		local reason = ""
 		
-		-- Check if this phone number is already in use by another character
-		local isInUse = nil
-		Database.Game:findOne({
-			collection = 'characters',
-			query = {
-				Phone = phoneNumber,
-				SID = {
-					["$ne"] = SID
-				}
-			},
-		}, function(success, results)
-			if not success then
-				isInUse = false
-				return
-			end
-			if success and results and #results > 0 then
-				isInUse = true
-			else
-				isInUse = false
-			end
-		end)
-		
-		-- Wait for async check (max 1 second)
-		local waitCount = 0
-		while isInUse == nil and waitCount < 100 do
-			Wait(10)
-			waitCount = waitCount + 1
-		end
-		
-		if isInUse == true then
-			needsNewNumber = true
-			reason = "This SIM card's number was already in use"
-		end
-		
-		-- Check if this SIM card number is already in another phone
-		if not needsNewNumber then
-			local allPhones = Inventory.Items:GetAll(SID, "phone", 1)
-			for _, v in ipairs(allPhones) do
-				if v.Slot ~= phoneSlot then
-					local vMeta = v.MetaData or {}
-					if vMeta.number == phoneNumber then
-						needsNewNumber = true
-						reason = "This SIM card was already in another phone"
-						break
-					end
+		-- Check if this SIM card number is already in another phone (local check first - faster)
+		local allPhones = Inventory.Items:GetAll(SID, "phone", 1)
+		for _, v in ipairs(allPhones) do
+			if v.Slot ~= phoneSlot then
+				local vMeta = v.MetaData or {}
+				if vMeta.number == phoneNumber then
+					needsNewNumber = true
+					reason = "This SIM card was already in another phone"
+					break
 				end
+			end
+		end
+		
+		-- Check if phone number is in use by another character (database check)
+		if not needsNewNumber then
+			local isInUse = false
+			local queryComplete = false
+			
+			Database.Game:findOne({
+				collection = 'characters',
+				query = {
+					Phone = phoneNumber,
+					SID = { ["$ne"] = SID }
+				},
+			}, function(success, results)
+				if success and results and #results > 0 then
+					isInUse = true
+				end
+				queryComplete = true
+			end)
+			
+			-- Wait for database query (max 1 second)
+			local waitCount = 0
+			while not queryComplete and waitCount < 100 do
+				Wait(10)
+				waitCount = waitCount + 1
+			end
+			
+			if isInUse then
+				needsNewNumber = true
+				reason = "This SIM card's number was already in use"
 			end
 		end
 		
@@ -339,31 +340,47 @@ function RegisterRandomItems()
 		else
 			-- Phone already has a SIM card
 			Execute:Client(source, "Notification", "Error", "Phone already has a SIM card")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
-		Inventory.Items:RemoveSlot(SID, "sim_card", 1, simSlot, 1)
-		
-		-- Refresh inventory to show changes
-		refreshShit(SID, true)
-		
-		-- Close inventory after inserting SIM card
-		-- TriggerClientEvent("Inventory:CloseUI", source)
-		
-		TriggerClientEvent("Phone:Client:RefreshPhoneData", source)
-		if source and source > 0 then
-			TriggerEvent("Phone:Server:UIReset", source)
+		-- Remove SIM card and verify it was removed
+		if not Inventory.Items:RemoveSlot(SID, "sim_card", 1, simSlot, 1) then
+			Execute:Client(source, "Notification", "Error", "Failed to remove SIM card")
+			_simCardInProgress[cooldownKey] = nil
+			return
 		end
+		
+		-- Clear in-progress flag
+		_simCardInProgress[cooldownKey] = nil
 	end)
 
 	
 	RegisterNetEvent("Inventory:EjectSimCard", function(phoneSlot)
 		local source = source
+		
+		-- Prevent duplicate calls - check cooldown and if already in progress
+		local cooldownKey = source .. "_eject_" .. tostring(phoneSlot)
+		if _simCardInProgress[cooldownKey] then
+			return -- Already processing, ignore duplicate call
+		end
+		if _simCardCooldowns[cooldownKey] and (GetGameTimer() - _simCardCooldowns[cooldownKey]) < 3000 then
+			return -- Still on cooldown, ignore duplicate call
+		end
+		_simCardInProgress[cooldownKey] = true
+		_simCardCooldowns[cooldownKey] = GetGameTimer()
+		
 		local plyr = Fetch:Source(source)
-		if plyr == nil then return end
+		if plyr == nil then
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
 		
 		local char = plyr:GetData("Character")
-		if char == nil then return end
+		if char == nil then
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
 		
 		local SID = char:GetData("SID")
 		
@@ -371,6 +388,7 @@ function RegisterRandomItems()
 		local phoneItem = Inventory:GetSlot(SID, phoneSlot, 1)
 		if not phoneItem or phoneItem.Name ~= "phone" then
 			Execute:Client(source, "Notification", "Error", "Invalid Phone")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
@@ -379,15 +397,44 @@ function RegisterRandomItems()
 		
 		if not phoneMeta.number or phoneMeta.number == "No Sim Card" then
 			Execute:Client(source, "Notification", "Error", "Phone does not have a SIM card")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
 		local phoneNumber = phoneMeta.number
 		
+		-- Double-check: Verify phone still has SIM card (prevent duplicate ejects)
+		-- Re-fetch phone item to ensure we have latest data
+		local verifyPhoneItem = Inventory:GetSlot(SID, phoneSlot, 1)
+		if not verifyPhoneItem then
+			Execute:Client(source, "Notification", "Error", "Phone item no longer exists")
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
+		local verifyPhoneMeta = verifyPhoneItem.MetaData or {}
+		if not verifyPhoneMeta.number or verifyPhoneMeta.number == "No Sim Card" or verifyPhoneMeta.number ~= phoneNumber then
+			Execute:Client(source, "Notification", "Error", "Phone SIM card state changed")
+			_simCardInProgress[cooldownKey] = nil
+			return
+		end
+		
+		-- Check if a SIM card with this number already exists in inventory (prevent duplicates)
+		local existingSimCards = Inventory.Items:GetAll(SID, "sim_card", 1)
+		for _, existingSim in ipairs(existingSimCards) do
+			local existingMeta = existingSim.MetaData or {}
+			if existingMeta.number == phoneNumber then
+				-- SIM card with this number already exists, don't create duplicate
+				Execute:Client(source, "Notification", "Error", "SIM card with this number already exists in your inventory")
+				_simCardInProgress[cooldownKey] = nil
+				return
+			end
+		end
+		
 		-- Check if inventory has space for SIM card
 		local freeSlots = Inventory:GetFreeSlotNumbers(SID, 1)
 		if #freeSlots < 1 then
 			Execute:Client(source, "Notification", "Error", "Not enough inventory space")
+			_simCardInProgress[cooldownKey] = nil
 			return
 		end
 		
@@ -430,18 +477,10 @@ function RegisterRandomItems()
 			end
 		end
 		
-		-- Refresh inventory to show changes
-		refreshShit(SID, true)
+		-- Clear in-progress flag
+		_simCardInProgress[cooldownKey] = nil
 		
 		Execute:Client(source, "Notification", "Success", "SIM card ejected from phone")
-		
-		-- Close inventory after ejecting SIM card
-		-- TriggerClientEvent("Inventory:CloseUI", source)
-		
-		TriggerClientEvent("Phone:Client:RefreshPhoneData", source)
-		if source and source > 0 then
-			TriggerEvent("Phone:Server:UIReset", source)
-		end
 	end)
 end
 
@@ -452,37 +491,32 @@ function GeneratePhoneNumber(source)
 		number = number .. tostring(math.random(0, 9))
 	end
 	
-		-- Check if number already exists in characters table
-		local charCheck = nil
-		Database.Game:findOne({
-			collection = 'characters',
-			query = {
-				Phone = number
-			},
-		}, function(success, results)
-			if not success then
-				charCheck = false
-				return
-			end
-			if success and results and #results > 0 then
-				charCheck = true
-			else
-				charCheck = false
-			end
-		end)
+	-- Check if number exists in characters table
+	local isInUse = false
+	local queryComplete = false
 	
-	-- Wait for async check
+	Database.Game:findOne({
+		collection = 'characters',
+		query = { Phone = number },
+	}, function(success, results)
+		if success and results and #results > 0 then
+			isInUse = true
+		end
+		queryComplete = true
+	end)
+	
+	-- Wait for database query (max 0.5 seconds)
 	local waitCount = 0
-	while charCheck == nil and waitCount < 50 do
+	while not queryComplete and waitCount < 50 do
 		Wait(10)
 		waitCount = waitCount + 1
 	end
 	
-	if charCheck == true then
+	if isInUse then
 		return GeneratePhoneNumber(source)
 	end
 	
-	-- Check if number already exists in inventory metadata
+	-- Check if number exists in inventory metadata
 	local results = MySQL.query.await('SELECT information FROM inventory WHERE item_id IN (?, ?)', {
 		'phone',
 		'sim_card'

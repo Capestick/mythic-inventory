@@ -286,8 +286,8 @@ RegisterNUICallback("Crafting:Craft", function(data, cb)
 				end)
 				if state.data ~= nil then
 					if Animations and Animations.Emotes and Animations.Emotes.Play then
-						Animations.Emotes:Play(state.data.animation, true, state.data.time, true)
-					end
+					Animations.Emotes:Play(state.data.animation, true, state.data.time, true)
+				end
 				end
 			else
 				-- Instant craft (time = 0), give items immediately
@@ -331,7 +331,7 @@ RegisterNUICallback("Crafting:Cancel", function(data, cb)
 		cb(state)
 		if state then
 			if Progress then
-				Progress:Cancel(true)
+			Progress:Cancel(true)
 			end
 			if Animations and Animations.Emotes and Animations.Emotes.ForceCancel then
 				Animations.Emotes:ForceCancel()
